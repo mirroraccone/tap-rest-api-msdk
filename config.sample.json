@@ -1,27 +1,38 @@
 {
-    "pagination_request_style": "jsonpath_paginator",
-    "pagination_response_style": "hateoas_body",
-    "api_url": "https://myexample_fhir_api_url/base_folder",
-    "pagination_page_size": 100,
-    "next_page_token_path": "$.link[?(@.relation=='next')].url",
-    "headers": {
-        "X-API-KEY": "my_secret_hex_string_for_authentication"
-    },
-    "streams": [
-        {
-            "name": "my_sample_table_name",
-            "path": "/ExampleService",
-            "params": {
-                "services-provided-type": "MY_INITIAL_EXAMPLE_SERVICE"
-            },
-            "primary_keys": [
-                "id"
-            ],
-            "records_path": "$.entry[*].resource",
-            "replication_key": "meta_lastUpdated",
-            "start_date": "2001-01-01T00:00:00.00+12:00",            
-            "source_search_field": "last-updated",
-            "source_search_query": "gt$last_run_date"
-        }
-    ]
+  "pagination_request_style": "jsonpath_paginator",
+  "pagination_response_style": "hateoas_body",
+  "api_url": "https://earthquake.usgs.gov/fdsnws",
+  "pagination_page_size": 100,
+  "next_page_token_path": "$.link[?(@.relation=='next')].url",
+  "headers": {
+    "X-API-KEY": "my_secret_hex_string_for_authentication"
+  },
+  "streams": [
+    {
+      "name": "us_earthquakes",
+      "path": "/event/1/query",
+      "params": {
+        "format": "geojson",
+        "starttime": ["2014-01-01", "2015-01-01", "2016-01-01"],
+        "endtime": ["2014-12-31", "2015-12-31", "2016-12-31"],
+        "minmagnitude": [1, 2, 3]
+      },
+      "primary_keys": ["id"],
+      "records_path": "$.features[*]",
+      "num_inference_records": 100,
+      "extraction_paths": {
+        "id": "$.id",
+        "magnitude": "$.properties.mag",
+        "place": "$.properties.place",
+        "time": "$.properties.time",
+        "coordinates": "$.geometry.coordinates",
+        "depth": "$.geometry.coordinates[2]",
+        "type": "$.properties.type"
+      },
+      "response_context_paths": {
+        "total_count": "$.metadata.count",
+        "generated_time": "$.metadata.generated"
+      }
+    }
+  ]
 }

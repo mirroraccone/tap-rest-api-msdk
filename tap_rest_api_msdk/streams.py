@@ -580,23 +580,115 @@ class DynamicStream(RestApiStream):
 
         Yields:
               Parsed records.
-
         """
-        yield from extract_jsonpath(self.records_path, input=response.json())
+        try:
+            json_response = response.json()
+            # Extract records using the configured records_path
+            records = extract_jsonpath(self.records_path, input=json_response)
+            
+            # Store the raw response context if needed for post-processing
+            self._last_response_context = json_response
+            
+            yield from records
+        except Exception as e:
+            self.logger.error(f"Error parsing response: {str(e)}")
+            self.logger.error(f"Response content: {response.text}")
+            raise
 
-    def post_process(  # noqa: PLR6301
+    def post_process(
         self,
         row: types.Record,
-        context: Optional[types.Context] = None,  # noqa: ARG002
+        context: Optional[types.Context] = None,
     ) -> Optional[dict]:
-        """As needed, append or transform raw data to match expected structure.
+        """Process each record to extract and transform data as needed.
 
         Args:
             row: required - the record for processing.
             context: optional - the singer context object.
 
         Returns:
-              A record that has been processed.
-
+              A processed record with consistent schema.
         """
-        return flatten_json(row, self.except_keys, self.store_raw_json_message)
+        try:
+            # Get the extraction paths from stream config
+            extraction_paths = self.config.get("extraction_paths", {})
+            
+            if extraction_paths:
+                # Extract specific fields based on configured paths
+                extracted_data = {}
+                for field_name, jsonpath in extraction_paths.items():
+                    values = list(extract_jsonpath(jsonpath, input=row))
+                    if values:
+                        extracted_data[field_name] = values[0] if len(values) == 1 else values
+                
+                # Add any additional context from the response if needed
+                if hasattr(self, '_last_response_context'):
+                    for field_name, jsonpath in self.config.get("response_context_paths", {}).items():
+                        values = list(extract_jsonpath(jsonpath, input=self._last_response_context))
+                        if values:
+                            extracted_data[field_name] = values[0] if len(values) == 1 else values
+                
+                processed_row = extracted_data
+            else:
+                # If no extraction paths specified, flatten the entire row
+                processed_row = flatten_json(row, self.except_keys, self.store_raw_json_message)
+            
+            # Add parameter context to identify which parameter combination generated this record
+            if hasattr(self, '_current_params'):
+                processed_row['_parameters'] = self._current_params
+
+            return processed_row
+        except Exception as e:
+            self.logger.error(f"Error post-processing record: {str(e)}")
+            self.logger.error(f"Original record: {row}")
+            raise
+
+    def get_records(self, context: Optional[dict]) -> Iterable[dict]:
+        """Return a generator of row-type dictionary objects.
+
+        Args:
+            context: The stream context.
+
+        Yields:
+            Each record from the source.
+        """
+        # If any param value is a list, we need to iterate through all combinations
+        param_lists = {}
+        for k, v in self.params.items():
+            if isinstance(v, list):
+                param_lists[k] = v
+
+        if param_lists:
+            # Get all combinations of parameter values
+            from itertools import product
+            param_names = list(param_lists.keys())
+            param_values = [param_lists[k] for k in param_names]
+            
+            # Iterate through all combinations
+            for values in product(*param_values):
+                # Create parameter combination
+                current_params = self.params.copy()
+                param_context = {}
+                for name, value in zip(param_names, values):
+                    current_params[name] = value
+                    param_context[name] = value
+                
+                # Store current parameter context for post_process
+                self._current_params = param_context
+                
+                # Temporarily set the params
+                original_params = self.params
+                self.params = current_params
+                
+                try:
+                    # Get records with current parameter combination
+                    for record in super().get_records(context):
+                        yield record
+                finally:
+                    # Restore original params
+                    self.params = original_params
+                    self._current_params = None
+        else:
+            # If no list parameters, proceed normally
+            for record in super().get_records(context):
+                yield record
